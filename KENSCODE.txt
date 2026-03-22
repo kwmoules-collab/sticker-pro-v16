@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sticker Pro V16</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        .sticker-preview { width: 300px; height: 440px; }
+        .artwork-box { height: 300px; width: 300px; overflow: hidden; }
+        .info-box { height: 140px; width: 300px; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-8">
+
+    <div class="max-w-6xl mx-auto">
+        <header class="flex justify-between items-center mb-8 border-b border-gray-700 pb-4">
+            <h1 class="text-3xl font-bold text-blue-400">STICKER PRO <span class="text-white">V16</span></h1>
+            <div class="flex gap-4">
+                <input type="file" id="csvInput" accept=".csv" class="hidden">
+                <button onclick="document.getElementById('csvInput').click()" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded font-medium transition">Import CSV</button>
+                <button onclick="exportPDF()" class="bg-green-600 hover:bg-green-500 px-4 py-2 rounded font-medium transition">Export A4 PDF</button>
+                <button onclick="exportZip()" class="bg-purple-600 hover:bg-purple-500 px-4 py-2 rounded font-medium transition">Export SVG Zip</button>
+            </div>
+        </header>
+
+        <div class="bg-gray-800 p-4 rounded-lg mb-8 flex gap-4 items-end">
+            <div class="flex-1">
+                <label class="block text-xs uppercase text-gray-400 mb-1">Manual Search (Artist or Album)</label>
+                <input type="text" id="manualQuery" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 outline-none focus:border-blue-500">
+            </div>
+            <button onclick="manualSearch()" class="bg-gray-600 hover:bg-gray-500 px-6 py-2 rounded font-medium">Search iTunes</button>
+        </div>
+
+        <div id="stickerGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+            </div>
+    </div>
+
+    <div id="qrHidden" class="hidden"></div>
+
+    <script>
+        const { jsPDF } = window.jspdf;
+        let stickerData = [];
+
+        // --- Core Utility Functions ---
+
+        const cleanTerm = (text) => {
+            return text.replace(/(\(Deluxe\)|Deluxe|Remastered|Remaster|\d+th Anniversary|Anniversary|Edition)/gi, '').trim();
+        };
+
+        const getYTMLink = (artist, album) => {
+            return `https://music.youtube.com/search?q=${encodeURIComponent(artist + ' ' + album)}`;
+        };
+
+        const fetchArtwork = async (artist, album) => {
+            const cleanA = cleanTerm(artist);
+            const cleanAl = cleanTerm(album);
+            
+            const queries = [
+                `${cleanA} ${cleanAl}`,
+                `${cleanAl}`,
+                `${cleanA}`
+            ];
+
+            for (let q of queries) {
+                try {
+                    const response = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=album&limit=1`);
+                    const data = await response.json();
+                    if (data.results && data.results.length > 0) {
+                        return data.results[0].artworkUrl100.replace('100x100bb.jpg', '800x800bb.jpg');
+                    }
+                } catch (e) { console.error("Search error", e); }
+            }
+            return 'https://via.placeholder.com/800x800?text=No+Artwork';
+        };
+
+        // --- UI Rendering ---
+
+        const renderStickers = () => {
+            const container = document.getElementById('stickerGrid');
+            container.innerHTML = '';
+            stickerData.forEach((s, index) => {
+                const card = document.createElement('div');
+                card.className = "bg-white text-black p-0 shadow-2xl rounded-sm overflow-hidden sticker-preview";
+                card.innerHTML = `
+                    <div class="artwork-box">
+                        <img src="${s.artwork}" class="w-full h-full object-cover">
+                    </div>
+                    <div class="info-box p-4 flex justify-between items-center bg-white border-t border-gray-100">
+                        <div class="pr-2 overflow-hidden">
+                            <h3 class="font-bold text-lg leading-tight truncate uppercase">${s.album}</h3>
+                            <p class="text-blue-700 font-semibold truncate">${s.artist}</p>
+                        </div>
+                        <div id="qr-${index}" class="flex-shrink-0"></div>
+                    </div>
+                    <div class="bg-gray-100 p-1 flex justify-center">
+                         <button onclick="removeSticker(${index})" class="text-[10px] text-red-500 uppercase font-bold">Delete</button>
+                    </div>
+                `;
+                container.appendChild(card);
+                
+                new QRCode(document.getElementById(`qr-${index}`), {
+                    text: getYTMLink(s.artist, s.album),
+                    width: 80,
+                    height: 80,
+                    colorDark : "#000000",
+                    colorLight : "#ffffff",
+                    correctLevel : QRCode.CorrectLevel.H
+                });
+            });
+        };
+
+        // --- File Logic ---
+
+        document.getElementById('csvInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+            reader.onload = async function(event) {
+                const rows = event.target.result.split('\n').slice(1);
+                for (let row of rows) {
+                    const [artist, album] = row.split(',').map(item => item?.trim());
+                    if (artist && album) {
+                        const artwork = await fetchArtwork(artist, album);
+                        stickerData.push({ artist, album, artwork });
+                    }
+                }
+                renderStickers();
+            };
+            reader.readAsText(file);
+        });
+
+        async function manualSearch() {
+            const query = document.getElementById('manualQuery').value;
+            if(!query) return;
+            const artwork = await fetchArtwork(query, "");
+            stickerData.push({ artist: "Manual Search", album: query, artwork });
+            renderStickers();
+        }
+
+        function removeSticker(idx) {
+            stickerData.splice(idx, 1);
+            renderStickers();
+        }
+
+        // --- Export Engines ---
+
+        async function exportPDF() {
+            const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+            const sW = 65, sH = 95;
+            const startX = 15, startY = 10;
+            const gap = 5;
+
+            for (let i = 0; i < stickerData.length; i++) {
+                if (i > 0 && i % 8 === 0) doc.addPage();
+                
+                const pos = i % 8;
+                const col = pos % 4;
+                const row = Math.floor(pos / 4);
+                const x = startX + (col * (sW + gap));
+                const y = startY + (row * (sH + gap));
+
+                const s = stickerData[i];
+                
+                // Draw Artwork (clipped)
+                try {
+                    doc.addImage(s.artwork, 'JPEG', x, y, sW, 65);
+                } catch(e) { 
+                    doc.setFillColor(200, 200, 200);
+                    doc.rect(x, y, sW, 65, 'F');
+                }
+
+                // Info Area
+                doc.setFillColor(255, 255, 255);
+                doc.rect(x, y + 65, sW, 30, 'F');
+                
+                doc.setFontSize(8);
+                doc.setTextColor(0, 0, 0);
+                doc.text(s.album.toUpperCase().substring(0, 25), x + 2, y + 72);
+                doc.setTextColor(0, 50, 200);
+                doc.text(s.artist.substring(0, 30), x + 2, y + 78);
+
+                // QR Code for PDF
+                const qrDiv = document.createElement('div');
+                const qr = new QRCode(qrDiv, { text: getYTMLink(s.artist, s.album), width: 100, height: 100 });
+                await new Promise(r => setTimeout(r, 100));
+                const qrImg = qrDiv.querySelector('canvas').toDataURL("image/png");
+                doc.addImage(qrImg, 'PNG', x + sW - 18, y + 70, 15, 15);
+            }
+            doc.save('Stickers_Print_Sheet.pdf');
+        }
+
+        async function exportZip() {
+            const zip = new JSZip();
+            for (let i = 0; i < stickerData.length; i++) {
+                const s = stickerData[i];
+                const qrDiv = document.createElement('div');
+                new QRCode(qrDiv, { text: getYTMLink(s.artist, s.album), width: 200, height: 200 });
+                await new Promise(r => setTimeout(r, 50));
+                const qrData = qrDiv.querySelector('canvas').toDataURL("image/png");
+
+                const svgContent = `
+                <svg width="65mm" height="95mm" viewBox="0 0 245 359" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="245" height="359" fill="white"/>
+                    <image href="${s.artwork}" x="0" y="0" width="245" height="245" preserveAspectRatio="xMidYMid slice" />
+                    <text x="10" y="280" font-family="Arial" font-weight="bold" font-size="14" fill="black">${s.album.toUpperCase()}</text>
+                    <text x="10" y="300" font-family="Arial" font-size="12" fill="#1d4ed8">${s.artist}</text>
+                    <image href="${qrData}" x="170" y="270" width="65" height="65" />
+                </svg>`;
+                zip.file(`${s.album.replace(/[^a-z0-9]/gi, '_')}.svg`, svgContent);
+            }
+            zip.generateAsync({type:"blob"}).then(content => {
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(content);
+                link.download = "Stickers_SVG_Affinity.zip";
+                link.click();
+            });
+        }
+    </script>
+</body>
+</html>
